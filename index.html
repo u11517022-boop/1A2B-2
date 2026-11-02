@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>1A2B 猜數字遊戲 - 歷史紀錄版</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 0 20px; line-height: 1.6; }
+        .panel { border: 1px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 5px; background-color: #f9f9f9; }
+        .history-item { border-left: 5px solid #007bff; padding-left: 10px; margin-bottom: 15px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 10px; }
+        .history-item.unfinished { border-left-color: #dc3545; background-color: #fff5f5; }
+        .history-item.completed { border-left-color: #28a745; background-color: #f4fff4; }
+        .debug-text { color: #dc3545; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .error { color: red; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+    <h1>1A2B 猜數字遊戲</h1>
+    
+    <!-- 遊戲控制與輸入面板 -->
+    <div class="panel">
+        <button id="btn-new-game">開新局</button>
+        <button id="btn-toggle-debug">切換除錯模式</button>
+        <span id="debug-area" class="debug-text" style="display:none; margin-left: 15px;"></span>
+        
+        <div id="game-play-area" style="margin-top: 15px;">
+            <label for="user-guess">請輸入 4 個不重複的數字：</label>
+            <input type="text" id="user-guess" maxlength="4" placeholder="例如：1234">
+            <button id="btn-submit-guess">猜！</button>
+            <div id="error-msg" class="error"></div>
+        </div>
+    </div>
+
+    <!-- 當前局猜測紀錄 -->
+    <div class="panel" id="current-round-panel">
+        <h3>當前局猜測歷程 (最新紀錄在最上方)</h3>
+        <table id="table-current-guess">
+            <thead>
+                <tr>
+                    <th>次序</th>
+                    <th>猜測數字</th>
+                    <th>結果</th>
+                    <th>時間</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 動態插入當前局紀錄 -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 歷史局紀錄 -->
+    <h2>多局歷史紀錄 (重新整理後清空)</h2>
+    <div id="history-container">
+        <!-- 動態插入舊局紀錄 -->
+    </div>
+
+    <script>
+        // --- 全局變數 ---
+        let gamesHistory = []; // 儲存所有已結束或換局的歷史局
+        let currentGame = null; // 當前局的資料物件
+        let isDebugMode = false; // 除錯模式開關
+        let gameCounter = 1; // 局數計數器
+        let guessCounter = 0; // 用來記錄這一局總共猜了幾次（確保次序正確）
+
+        // --- 遊戲初始化 ---
+        function initGame() {
+            startNewGame();
+            
+            // 綁定按鈕事件
+            document.getElementById('btn-new-game').addEventListener('click', startNewGame);
+            document.getElementById('btn-toggle-debug').addEventListener('click', toggleDebugMode);
+            document.getElementById('btn-submit-guess').addEventListener('click', handleGuess);
+            document.getElementById('user-guess').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') handleGuess();
+            });
+        }
+
+        // --- 開始新局 ---
+        function startNewGame() {
+            // 1. 如果有舊局在進行中，將其標記為「未完成」並移入歷史紀錄
+            if (currentGame) {
+                if (currentGame.status === '進行中') {
+                    currentGame.status = '未完成';
+                }
+                gamesHistory.unshift(currentGame); // 新的歷史放在最上面
+            }
+
+            // 2. 產生一組新的 4 位不重複隨機數
+            const answer = generateAnswer();
+
+            // 3. 重設此局的猜測次數計數器
+            guessCounter = 0;
+
+            // 4. 初始化當前局物件
+            currentGame = {
+                gameId: gameCounter++,
+                answer: answer,
+                status: '進行中', // 進行中、已完成、未完成
+                guesses: [], // 每次猜測的紀錄（這裡會用 unshift 讓最新答案在最前面）
+                startTime: getFormattedTime()
+            };
+
+            // 5. 重設 UI
+            document.getElementById('user-guess').value = '';
+            document.getElementById('user-guess').disabled = false;
+            document.getElementById('btn-submit-guess').disabled = false;
+            document.getElementById('error-msg').innerText = '';
+            
+            updateDebugDisplay();
+            renderCurrentGuesses();
+            renderHistory();
+        }
+
+        // --- 產生 4 個不重複數字 ---
+        function generateAnswer() {
+            const digits = ['0','1','2','3','4','5','6','7','8','9'];
+            let result = '';
+            for (let i = 0; i < 4; i++) {
+                const idx = Math.floor(Math.random() * digits.length);
+                result += digits.splice(idx, 1);
+            }
+            return result;
+        }
+
+        // --- 處理猜數字邏輯 ---
+        function handleGuess() {
+            const guessInput = document.getElementById('user-guess');
+            const guess = guessInput.value.trim();
+            const errorMsg = document.getElementById('error-msg');
+            errorMsg.innerText = '';
+
+            // 驗證無效輸入 (必須是 4 位純數字且不重複)
+            if (!/^\d{4}$/.test(guess)) {
+                errorMsg.innerText = '請輸入剛好 4 位數字！';
+                return; 
+            }
+            if (new Set(guess).size !== 4) {
+                errorMsg.innerText = '數字不能重複！';
+                return; 
+            }
+
+            // 計算幾 A 幾 B
+            const result = checkAB(currentGame.answer, guess);
+            
+            // 增加序號計數
+            guessCounter++;
+
+            // 【修改點 1】改用 unshift，把最新的猜測紀錄塞到陣列的最前面 [0]
+            currentGame.guesses.unshift({
+                sequence: guessCounter, // 雖然在陣列最前面，但次序依然保持正確的遞增數字
+                guess: guess,
+                result: result,
+                time: getFormattedTime()
+            });
+
+            // 檢查是否過關
+            if (result === '4A0B') {
+                currentGame.status = '已完成';
+                errorMsg.innerText = '恭喜答對了！本局已結束。';
+                guessInput.disabled = true;
+                document.getElementById('btn-submit-guess').disabled = true;
+            }
+
+            guessInput.value = '';
+            guessInput.focus();
+            
+            renderCurrentGuesses();
+        }
+
+        // --- 判斷 A 和 B ---
+        function checkAB(answer, guess) {
+            let a = 0;
+            let b = 0;
+            for (let i = 0; i < 4; i++) {
+                if (guess[i] === answer[i]) {
+                    a++;
+                } else if (answer.includes(guess[i])) {
+                    b++;
+                }
+            }
+            return `${a}A${b}B`;
+        }
+
+        // --- 除錯模式切換 ---
+        function toggleDebugMode() {
+            isDebugMode = !isDebugMode;
+            updateDebugDisplay();
+        }
+
+        function updateDebugDisplay() {
+            const debugArea = document.getElementById('debug-area');
+            if (isDebugMode && currentGame) {
+                debugArea.innerText = `【除錯模式】本局答案：${currentGame.answer}`;
+                debugArea.style.display = 'inline';
+            } else {
+                debugArea.style.display = 'none';
+            }
+        }
+
+        // --- 取得當前格式化時間 (時:分:秒) ---
+        function getFormattedTime() {
+            const now = new Date();
+            return now.toTimeString().split(' ')[0];
+        }
+
+        // --- 渲染當前局的表格 ---
+        function renderCurrentGuesses() {
+            const tbody = document.querySelector('#table-current-guess tbody');
+            tbody.innerHTML = '';
+            
+            // 因為資料在 handleGuess 裡已經是最新在前，這裡依序輸出就會是「最新在最上面」
+            currentGame.guesses.forEach(g => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${g.sequence}</td>
+                    <td>${g.guess}</td>
+                    <td>${g.result}</td>
+                    <td>${g.time}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- 渲染歷史局紀錄區 ---
+        function renderHistory() {
+            const container = document.getElementById('history-container');
+            container.innerHTML = '';
+
+            if (gamesHistory.length === 0) {
+                container.innerHTML = '<p>暫無歷史舊局資料</p>';
+                return;
+            }
+
+            gamesHistory.forEach(game => {
+                const div = document.createElement('div');
+                let statusClass = 'unfinished';
+                if (game.status === '已完成') statusClass = 'completed';
+
+                div.className = `history-item ${statusClass}`;
+                
+                let tableRows = '';
+                if (game.guesses.length === 0) {
+                    tableRows = '<tr><td colspan="4" style="text-align:center;">此局沒有任何猜測紀錄</td></tr>';
+                } else {
+                    // 歷史局也同樣會保持「最新在最上面」的順序
+                    game.guesses.forEach(g => {
+                        tableRows += `
+                            <tr>
+                                <td>${g.sequence}</td>
+                                <td>${g.guess}</td>
+                                <td>${g.result}</td>
+                                <td>${g.time}</td>
+                            </tr>
+                        `;
+                    });
+                }
+
+                div.innerHTML = `
+                    <strong>第 ${game.gameId} 局</strong> (開局時間: ${game.startTime}) 
+                    - 狀態: <strong>${game.status}</strong> (答案: ${game.answer})
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>次序</th>
+                                <th>猜測數字</th>
+                                <th>結果</th>
+                                <th>時間</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tableRows}
+                        </tbody>
+                    </table>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // 啟動遊戲
+        window.onload = initGame;
+    </script>
+</body>
